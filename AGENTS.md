@@ -27,8 +27,11 @@ npm ci
 ### 3. 部署（確認 2）
 
 ```bash
-npx wrangler deploy   # auto-provision D1（second-brain-db）與 OAUTH_KV
-printf "%s" "<32+ 亂數>" | npx wrangler secret put AUTH_TOKEN
+# 上游 wrangler.jsonc 有 secrets.required: ["AUTH_TOKEN"]——wrangler 4.114+ 對不存在的 worker
+# 拒絕「先 deploy 再 secret put」順序（C run 1 實測必失敗）。用 secrets-file 一次帶入：
+printf '{"AUTH_TOKEN":"%s"}' "<32+ 亂數>" > /tmp/sb-secrets.json
+npx wrangler deploy --secrets-file /tmp/sb-secrets.json   # auto-provision D1（second-brain-db）與 OAUTH_KV
+rm /tmp/sb-secrets.json
 ```
 
 - **E45 陷阱**：wrangler auto-provision 若中途失敗，已建資源的 ID 不會寫回 wrangler.jsonc——重跑會撞 already exists（10014）。此時 `npx wrangler d1 list` / `kv namespace list` 查 ID 手動填入 wrangler.jsonc 再部署
@@ -40,7 +43,7 @@ printf "%s" "<32+ 亂數>" | npx wrangler secret put AUTH_TOKEN
 
 1. `GET /` → 200
 2. 帶 AUTH_TOKEN 擷取一則筆記 → success 且 **不得 500**（寫路徑防呆驗證點；端點路徑讀上游 src/routes）
-3. 關鍵字搜尋命中＋降級提示（「keyword matches only」語義）
+3. 關鍵字搜尋：命中時回應含 `"semantic_unavailable": true`；零命中時回 prose 降級提示（Vectorize index missing）——HTTP 路徑的降級證據是這兩個，「keyword matches only」prose 只在 MCP 路徑（C run 1 實測）
 4. 無 token 打寫入端點 → 401/403
 5. 刪除筆記 → deleted、再搜不命中
 
