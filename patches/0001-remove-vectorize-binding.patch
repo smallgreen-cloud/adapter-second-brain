@@ -1,0 +1,17 @@
+diff --git a/wrangler.jsonc b/wrangler.jsonc
+index 966ba36..8efbf5f 100644
+--- a/wrangler.jsonc
++++ b/wrangler.jsonc
+@@ -12,12 +12,6 @@
+ 			"database_name": "second-brain-db"
+ 		}
+ 	],
+-	"vectorize": [
+-		{
+-			"binding": "VECTORIZE",
+-			"index_name": "second-brain-vectors"
+-		}
+-	],
+ 	"ai": {
+ 		"binding": "AI"
+ 	},

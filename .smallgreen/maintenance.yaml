@@ -1,0 +1,31 @@
+schema_version: "0.1.0"
+update:
+  strategy: upstream-pr
+  upstream_check: gh api repos/rahilp/second-brain-cloudflare/commits/main --jq .sha（與 UPSTREAM.md 鎖定值比對；重點審 Vectorize 呼叫點增減 vs patch 0002 覆蓋面）
+  preview_before_promote: true
+backup:
+  targets: [d1]
+  method: 筆記＝珍貴資料。npx wrangler d1 export second-brain-db --output backup.sql（升級與移除前必做）
+restore:
+  method: npx wrangler d1 execute second-brain-db --file backup.sql；程式碼 git revert 後重新部署
+  d1_time_travel_note: D1 Time Travel 免費層可回溯 30 天
+uninstall:
+  steps:
+    - 先 npx wrangler d1 export second-brain-db --output backup.sql
+    - npx wrangler delete --name second-brain --force（secrets 隨之移除）
+    - npx wrangler d1 delete second-brain-db
+    - npx wrangler kv namespace delete --namespace-id <OAUTH_KV 的 id>
+    - 刪除自己帳號下的 repo 副本
+  data_export_first: true
+quota_watchdog:
+  watch:
+    - resource: workers_ai_neurons
+      free_limit: 10,000 Neurons/day（每次擷取跑 embedding＋LLM 分析；重度擷取日最先撞的限額）
+      check_method: dashboard → AI → Workers AI → usage
+      alert_threshold: "80%"
+    - resource: d1_rows_read
+      free_limit: 5,000,000 rows read/day（keyword 搜尋走 D1 LIKE/FTS）
+      check_method: dashboard → Storage & Databases → D1 → metrics
+    - resource: workers_requests
+      free_limit: 100,000 requests/day（含每日 cron 圖譜回填）
+      check_method: dashboard → Workers → second-brain → metrics

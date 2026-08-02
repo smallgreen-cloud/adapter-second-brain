@@ -1,0 +1,22 @@
+schema_version: "0.1.0"
+health:
+  path: /
+  expect_status: 200
+smoke:
+  - name: 前端載入
+    steps:
+      - action: http_request
+        params: { method: GET, path: / }
+    expect: { status: 200 }
+    idempotency: true
+user_acceptance:
+  - task: 帶 AUTH_TOKEN 擷取一則筆記（POST capture 端點，路徑與欄位以上游 src/routes 為準）
+    success_looks_like: 回應 success 且 D1 entries 有該筆（keyword-only 模式下不觸發 500——寫路徑防呆 patch 的驗證點）
+  - task: 關鍵字搜尋剛擷取的筆記（recall/search 端點）
+    success_looks_like: 命中該筆並帶「semantic search unavailable / keyword matches only」類降級提示（上游原生 fallback 語義）
+  - task: 未帶 AUTH_TOKEN 打寫入端點
+    success_looks_like: 401/403＝token 認證生效
+  - task: 刪除該筆記
+    success_looks_like: 回應 deleted；再搜尋不命中（Vectorize deleteByIds 在降級模式 non-fatal 略過，不阻斷刪除）
+uninstall_check:
+  resource_zero_diff: true
