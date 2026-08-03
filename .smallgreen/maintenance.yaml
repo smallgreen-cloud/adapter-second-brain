@@ -20,8 +20,8 @@ uninstall:
 quota_watchdog:
   watch:
     - resource: workers_ai_neurons
-      free_limit: 10,000 Neurons/day（每次擷取跑 embedding＋LLM 分析；重度擷取日最先撞的限額）
-      check_method: dashboard → AI → Workers AI → usage
+      free_limit: 10,000 Neurons/day（每次擷取跑 embedding＋LLM 分析；重度擷取日最先撞的限額。**帳號層共用，用盡即當日停擺**——擷取與檢索都回 500，不是降級；計數於 00:00 UTC 重置）
+      check_method: 探針 `POST /accounts/{id}/ai/run/@cf/baai/bge-small-en-v1.5`，回 code 4006 即已用盡（比 dashboard 快且可自動化）
       alert_threshold: "80%"
     - resource: d1_rows_read
       free_limit: 5,000,000 rows read/day（keyword 搜尋走 D1 LIKE/FTS）
