@@ -10,6 +10,8 @@ smoke:
     expect: { status: 200 }
     idempotency: true
 user_acceptance:
+  # 前置：Workers AI 額度探針須回 success（額度耗盡時以下 UA-1/2/4 必然失敗且當日不可重試）
+
   - task: 帶 AUTH_TOKEN 擷取一則筆記（POST capture 端點，路徑與欄位以上游 src/routes 為準）
     success_looks_like: 回應 success 且 D1 entries 有該筆（keyword-only 模式下不觸發 500——寫路徑防呆 patch 的驗證點）
   - task: 關鍵字搜尋剛擷取的筆記（recall/search 端點）

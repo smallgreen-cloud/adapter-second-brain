@@ -7,7 +7,7 @@
 
 - node 22+、npm（上游 wrangler 4.x 要求 node>=22；有 package-lock.json，安裝可重現）；`CLOUDFLARE_API_TOKEN`＋`CLOUDFLARE_ACCOUNT_ID` 環境變數（Workers＋D1＋KV Edit 權限；**不需 Vectorize 權限——本 adapter 即為無該權限帳號的降級版**）
 - 帳號需已註冊 workers.dev 子網域；Workers AI 免費額度可用（embedding＋LLM 用）
-- 降級語義：語意搜尋→關鍵字搜尋（上游原生 fallback）；語意去重與向量鄰居邊停用；擷取的筆記 `vector_ids` 記為空（落入上游 `unvectorized` 回補集合）；`POST /migration/reembed` 回 503 而非假成功
+- 降級語義：語意搜尋→關鍵字搜尋（上游原生 fallback）。**注意此降級只擺脫 Vectorize，並未擺脫 Workers AI**——擷取與檢索兩條路徑都在 try 之外呼叫 `embed()`／`inferQueryTags()`（`src/recall/search.ts:124-127`），Workers AI 不可用時兩者皆 500（C-02 run 實測）；語意去重與向量鄰居邊停用；擷取的筆記 `vector_ids` 記為空（落入上游 `unvectorized` 回補集合）；`POST /migration/reembed` 回 503 而非假成功
 - 閘門指令（乾淨環境須全數 exit 0，CON-8；順序不可調換——tsc 依賴 wrangler types 的生成物）：`npx wrangler types` → `npx tsc --noEmit` → `npm test`。**兩個 patch 都套上後仍須全綠**：patch 0002 含型別宣告，缺它降級樹會在 13 處報 TS2339
 
 ## 步驟
@@ -26,7 +26,18 @@ git apply <本repo>/patches/0002-vectorize-optional-binding.patch
 npm ci
 ```
 
-### 3. 部署（確認 2）
+### 3. 前置探針（30 秒，省下白跑一輪部署）
+
+擷取與檢索都吃 Workers AI 免費額度（10k Neurons/day，帳號層共用）。**額度耗盡時驗收必定失敗且無法在當日重試**，所以部署前先探一次：
+
+```bash
+curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai/run/@cf/baai/bge-small-en-v1.5" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" -d '{"text":"probe"}'
+```
+
+回 `"code":4006`（used up your daily free allocation）＝當日額度已盡，**先停下回報**，不要部署後才發現（免費層計數於 00:00 UTC 重置）。回 `"success":true` 才繼續。
+
+### 4. 部署（確認 2）
 
 ```bash
 # 上游 wrangler.jsonc 有 secrets.required: ["AUTH_TOKEN"]——wrangler 4.114+ 對不存在的 worker
@@ -37,9 +48,15 @@ rm /tmp/sb-secrets.json
 ```
 
 - **E45 陷阱**：wrangler auto-provision 若中途失敗，已建資源的 ID 不會寫回 wrangler.jsonc——重跑會撞 already exists（10014）。此時 `npx wrangler d1 list` / `kv namespace list` 查 ID 手動填入 wrangler.jsonc 再部署
-- D1 migrations：依上游 db/ 與 README 指示執行（如有 migration 檔）
+- **D1 schema 必須手動套用**（上游 README 與 docs 全文 0 命中此步驟，C-02 run 實測；不套則無 entries/edges 表，所有寫入 500）：
 
-### 4. 驗收（確認 3）
+  ```bash
+  npx wrangler d1 execute second-brain-db --remote --file=db/schema.sql --yes
+  ```
+
+  `--yes` 是非互動必要（wrangler 對 --remote 會要求確認）。套完可用 `sqlite_master` 查詢確認 `entries`／`edges` 存在
+
+### 5. 驗收（確認 3）
 
 照 `.smallgreen/acceptance.yaml`：
 

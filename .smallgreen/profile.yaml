@@ -13,7 +13,7 @@ login_method: token
 data:
   types: [notes, knowledge_graph]
   stored_in: [d1, kv]
-  notes: 筆記與知識圖譜存 D1（珍貴資料）；OAUTH_KV 存 MCP OAuth 狀態。本 adapter 為 keyword-only 降級版——Vectorize binding 已由 patch 移除（token 無 Vectorize 權限的帳號適配，B run E43）：語意搜尋降為關鍵字搜尋（上游讀路徑原生 fallback），寫路徑由 patch 0002 改為「binding 不存在才跳過」（上游 E44 缺口——lifecycle 有防呆但 store/duplicate/traverse 沒有；binding 在位時錯誤照常傳播，上游 981 個測試零改動全綠）。副作用：語意去重與向量鄰居邊推斷停用；降級模式下擷取的筆記 vector_ids 記為空，落入上游既有的 unvectorized 回補集合；`/migration/reembed` 回 503 而非假成功。嵌入與 LLM 走 Workers AI（10k Neurons/day）
+  notes: 筆記與知識圖譜存 D1（珍貴資料）；OAUTH_KV 存 MCP OAuth 狀態。本 adapter 為 keyword-only 降級版——Vectorize binding 已由 patch 移除（token 無 Vectorize 權限的帳號適配，B run E43）：語意搜尋降為關鍵字搜尋（上游讀路徑原生 fallback），寫路徑由 patch 0002 改為「binding 不存在才跳過」（上游 E44 缺口——lifecycle 有防呆但 store/duplicate/traverse 沒有；binding 在位時錯誤照常傳播，上游 981 個測試零改動全綠）。副作用：語意去重與向量鄰居邊推斷停用；降級模式下擷取的筆記 vector_ids 記為空，落入上游既有的 unvectorized 回補集合；`/migration/reembed` 回 503 而非假成功。嵌入與 LLM 走 Workers AI（10k Neurons/day，**帳號層共用**）——**此降級只擺脫 Vectorize，未擺脫 Workers AI**：擷取與檢索兩條路徑都在 try 之外呼叫 embed()／inferQueryTags()，Neurons 用盡時兩者皆 500（C-02 run 實測，故引導新增部署前的額度探針）
 secrets:
   - name: AUTH_TOKEN
     purpose: API 與 MCP 存取 token（必要——所有寫入端點的認證）
