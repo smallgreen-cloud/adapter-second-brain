@@ -1,0 +1,237 @@
+diff --git a/src/capture/duplicate.ts b/src/capture/duplicate.ts
+index 97ec4cd..82d504b 100644
+--- a/src/capture/duplicate.ts
++++ b/src/capture/duplicate.ts
+@@ -49,7 +49,12 @@ export async function checkDuplicateAndContradiction(
+ }> {
+   const sample = getDuplicateCheckSample(content);
+   const values = await embed(sample, env, config);
+-  const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
++  // Keyword-only deployment: no index, so no near-neighbours — every entry is
++  // "unique" and no contradiction check runs. Recorded as a known degradation
++  // rather than an error, because capture itself is unaffected.
++  const { matches } = env.VECTORIZE
++    ? await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" })
++    : { matches: [] as VectorizeMatch[] };
+ 
+   const neighborScores = new Map<string, number>();
+   for (const m of matches) {
+diff --git a/src/capture/lifecycle.ts b/src/capture/lifecycle.ts
+index 1e034a6..b0dcb8d 100644
+--- a/src/capture/lifecycle.ts
++++ b/src/capture/lifecycle.ts
+@@ -24,7 +24,7 @@ export async function forgetEntry(id: string, env: Env): Promise<ForgetResult> {
+ 
+   try {
+     if (vectorIds.length) {
+-      await env.VECTORIZE.deleteByIds(vectorIds);
++      await env.VECTORIZE!.deleteByIds(vectorIds);
+     }
+   } catch (e) {
+     console.error("Vectorize delete failed (non-fatal):", e);
+@@ -46,7 +46,7 @@ export async function deprecateEntry(id: string, env: Env): Promise<boolean> {
+     .bind(JSON.stringify(withStatus(tags, "deprecated")), "[]", id).run();
+ 
+   try {
+-    if (vectorIds.length) await env.VECTORIZE.deleteByIds(vectorIds);
++    if (vectorIds.length) await env.VECTORIZE!.deleteByIds(vectorIds);
+   } catch (e) {
+     console.error("Vectorize deleteByIds failed during deprecate (non-fatal):", e);
+   }
+diff --git a/src/capture/store.ts b/src/capture/store.ts
+index 336a8fc..bd7a5cf 100644
+--- a/src/capture/store.ts
++++ b/src/capture/store.ts
+@@ -41,9 +41,15 @@ export async function storeEntry(
+     })
+   );
+ 
+-  await env.VECTORIZE.upsert(vectors);
++  // Keyword-only deployment: with no index bound there is nothing to upsert into,
++  // and capture must still succeed. Record no vector ids rather than ids for
++  // vectors that were never written — that is what puts the entry in the
++  // `vector_ids = '[]'` set the admin routes already report as `unvectorized`,
++  // so a later backfill picks it up if an index is ever bound. A *bound* index
++  // that errors still throws: that is a real fault, not a deployment shape.
++  if (env.VECTORIZE) await env.VECTORIZE.upsert(vectors);
+ 
+-  const vectorIds = vectors.map(v => v.id);
++  const vectorIds = env.VECTORIZE ? vectors.map(v => v.id) : [];
+ 
+   await env.DB.prepare(
+     `UPDATE entries SET vector_ids = ? WHERE id = ?`
+@@ -54,13 +60,15 @@ export async function storeEntry(
+ 
+ export async function deleteStaleVectors(env: Env, oldIds: string[], newIds: string[]): Promise<void> {
+   if (!newIds.length) return;
++  if (!env.VECTORIZE) return;
+   const stale = oldIds.filter(v => !newIds.includes(v));
+   if (stale.length) await env.VECTORIZE.deleteByIds(stale);
+ }
+ 
+ export async function reembedOrThrow(env: Env, id: string, content: string, tags: string[], source: string, config: Readonly<Config> = DEFAULTS): Promise<string[]> {
+   const ids = await storeEntry(env, id, content, tags, source, Date.now(), config);
+-  if (!ids.length) throw new Error("re-embed produced no vectors");
++  // No index bound means no vectors by design, not a failed re-embed.
++  if (!ids.length && env.VECTORIZE) throw new Error("re-embed produced no vectors");
+   return ids;
+ }
+ 
+@@ -121,15 +129,20 @@ export async function appendToEntry(
+     metadata[`tag_${t.replace(/[."]/g, "_")}`] = true;
+   });
+ 
+-  await env.VECTORIZE.insert([{
+-    id: newChunkId,
+-    values,
+-    metadata,
+-  }]);
++  if (env.VECTORIZE) {
++    await env.VECTORIZE.insert([{
++      id: newChunkId,
++      values,
++      metadata,
++    }]);
++  }
++
++  // Same rule as storeEntry: only record the chunk id if the chunk was written.
++  const appendedVectorIds = env.VECTORIZE ? [...existingVectorIds, newChunkId] : existingVectorIds;
+ 
+   await env.DB.prepare(
+     `UPDATE entries SET content = ?, vector_ids = ? WHERE id = ?`
+-  ).bind(newContent, JSON.stringify([...existingVectorIds, newChunkId]), id).run();
++  ).bind(newContent, JSON.stringify(appendedVectorIds), id).run();
+ 
+   try {
+     await inferEdgesOnWrite(id, await neighborsFromVectorQuery(values, env), env);
+diff --git a/src/env.ts b/src/env.ts
+index aca4799..6f2e65f 100644
+--- a/src/env.ts
++++ b/src/env.ts
+@@ -1,8 +1,15 @@
+ // Bindings come from the generated Cloudflare.Env (see `wrangler types`);
+ // VECTORIZE_GRACE_MS is widened from its generated literal default so tests
+ // and per-deploy vars can override it.
+-export interface Env extends Omit<Cloudflare.Env, "VECTORIZE_GRACE_MS"> {
++export interface Env extends Omit<Cloudflare.Env, "VECTORIZE_GRACE_MS" | "VECTORIZE"> {
+   VECTORIZE_GRACE_MS?: string;
++  // Declared optional rather than inherited, because a keyword-only deployment
++  // removes the binding from wrangler.jsonc and the generated Cloudflare.Env
++  // then carries no VECTORIZE at all — every `env.VECTORIZE` would fail to
++  // typecheck. Optional keeps both shapes compiling, and makes the compiler the
++  // thing that finds a newly added call site at the next upstream sync: an
++  // unhandled `env.VECTORIZE.x` is a type error, not something to grep for.
++  VECTORIZE?: VectorizeIndex;
+ }
+ 
+ // Worker version, echoed by GET /health. The desktop app compares this against
+diff --git a/src/graph/pass.ts b/src/graph/pass.ts
+index 7737f0f..8b95454 100644
+--- a/src/graph/pass.ts
++++ b/src/graph/pass.ts
+@@ -38,7 +38,7 @@ export async function runGraphPass(env: Env, ctx: ExecutionContext): Promise<voi
+   for (const entry of unlinked) {
+     try {
+       const values = await embed(entry.content, env, cfg);
+-      const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
++      const { matches } = await env.VECTORIZE!.query(values, { topK: 5, returnMetadata: "all" });
+       const scores = new Map<string, number>();
+       for (const m of matches) {
+         const pid = (m.metadata as any)?.parentId ?? m.id;
+diff --git a/src/graph/traverse.ts b/src/graph/traverse.ts
+index 6ec1bb9..1640871 100644
+--- a/src/graph/traverse.ts
++++ b/src/graph/traverse.ts
+@@ -203,6 +203,8 @@ export async function buildGraph(opts: { seed?: string; limit?: number }, env: E
+ }
+ 
+ export async function neighborsFromVectorQuery(values: number[], env: Env): Promise<{ id: string; score: number }[]> {
++  // Keyword-only deployment: no vector neighbours, so no inferred graph edges.
++  if (!env.VECTORIZE) return [];
+   const { matches } = await env.VECTORIZE.query(values, { topK: 5, returnMetadata: "all" });
+   const scores = new Map<string, number>();
+   for (const m of matches) {
+diff --git a/src/recall/search.ts b/src/recall/search.ts
+index 4dec03b..2cddd57 100644
+--- a/src/recall/search.ts
++++ b/src/recall/search.ts
+@@ -143,7 +143,7 @@ export async function recallEntries(
+     const vectors: VectorizeVector[] = [];
+     try {
+       for (let i = 0; i < vectorIds.length; i += VECTORIZE_GET_BY_IDS_BATCH) {
+-        vectors.push(...await env.VECTORIZE.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
++        vectors.push(...await env.VECTORIZE!.getByIds(vectorIds.slice(i, i + VECTORIZE_GET_BY_IDS_BATCH)));
+       }
+     } catch (e) {
+       console.error("Vectorize getByIds failed (degrading to keyword-only):", e);
+@@ -162,7 +162,7 @@ export async function recallEntries(
+     const vectorizeTopK = Math.min(topK * VECTORIZE_TOP_K_MULTIPLIER, 50);
+     const denseQuery = async (): Promise<{ matches: VectorizeMatch[] }> => {
+       try {
+-        return await env.VECTORIZE.query(values, { topK: vectorizeTopK, returnMetadata: "all", returnValues: true });
++        return await env.VECTORIZE!.query(values, { topK: vectorizeTopK, returnMetadata: "all", returnValues: true });
+       } catch (e) {
+         console.error("Vectorize query failed (degrading to keyword-only):", e);
+         semanticUnavailable = true;
+@@ -178,7 +178,7 @@ export async function recallEntries(
+     // retuned recall widening.
+     if (!semanticUnavailable && results.matches.length && results.matches[0].score < cfg.RECALL_WIDEN_THRESHOLD) {
+       try {
+-        results = await env.VECTORIZE.query(values, { topK: 50, returnMetadata: "all", returnValues: true });
++        results = await env.VECTORIZE!.query(values, { topK: 50, returnMetadata: "all", returnValues: true });
+       } catch (e) {
+         console.error("Vectorize widen-query failed (non-fatal, keeping narrow results):", e);
+       }
+diff --git a/src/routes/migration.ts b/src/routes/migration.ts
+index 5c3b287..73817c7 100644
+--- a/src/routes/migration.ts
++++ b/src/routes/migration.ts
+@@ -17,6 +17,7 @@
+ import type { Env } from "../env";
+ import { json, requireAuth } from "../lib/http";
+ import { resolveConfig } from "../config";
++import { checkVectorizeHealth } from "../vectorize/health";
+ import {
+   clearMigration,
+   estimate,
+@@ -72,6 +73,14 @@ export async function handleMigrationRoutes(
+     const authErr = requireAuth(request, env);
+     if (authErr) return authErr;
+ 
++    // The write path skips vector writes when no index is bound, so without this
++    // guard a rebuild would count every entry as processed while writing nothing.
++    // A rebuild with no index to rebuild into is not a partial success.
++    const health = await checkVectorizeHealth(env);
++    if (!health.ok) {
++      return json({ ok: false, error: `Vectorize index unavailable: ${health.error ?? "no binding"}` }, 503);
++    }
++
+     const cfg = await resolveConfig(env);
+     const result = await runBatch(env, cfg);
+     return json({ ok: true, ...result });
+diff --git a/src/vectorize/health.ts b/src/vectorize/health.ts
+index 9fc3abd..0d5f87d 100644
+--- a/src/vectorize/health.ts
++++ b/src/vectorize/health.ts
+@@ -24,7 +24,7 @@ export interface VectorizeHealth {
+ 
+ export async function checkVectorizeHealth(env: Env): Promise<VectorizeHealth> {
+   try {
+-    const info = (await env.VECTORIZE.describe()) as any;
++    const info = (await env.VECTORIZE!.describe()) as any;
+     // `vectorsCount` is the beta spelling of V2's `vectorCount`; accept either.
+     const count = info?.vectorCount ?? info?.vectorsCount;
+     const name = info?.name;
+diff --git a/test/integration/append.test.ts b/test/integration/append.test.ts
+index ff66d4e..c7fe79a 100644
+--- a/test/integration/append.test.ts
++++ b/test/integration/append.test.ts
+@@ -260,7 +260,7 @@ describe("POST /append", () => {
+     expect(res.status).toBe(200);
+ 
+     // Verify Vectorize.insert was called with tag_* metadata fields
+-    const insertMock = env.VECTORIZE.insert as ReturnType<typeof import("vitest").vi.fn>;
++    const insertMock = env.VECTORIZE!.insert as ReturnType<typeof import("vitest").vi.fn>;
+     const vectors = insertMock.mock.calls[0][0] as any[];
+     expect(vectors[0].metadata).toMatchObject({ tag_work: true, tag_idea: true });
+   });

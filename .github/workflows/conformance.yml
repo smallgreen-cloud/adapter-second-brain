@@ -9,4 +9,4 @@ jobs:
   adapter-conformance:
     uses: smallgreen-cloud/conformance/.github/workflows/adapter-conformance.yml@main
     with:
-      spec_ref: v0.2.1
+      spec_ref: v0.3.1

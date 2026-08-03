@@ -1,12 +1,14 @@
 # AGENTS.md — Second Brain 部署引導（跨 CLI，keyword-only 降級版）
 
 你是導遊不是裁判：每一關綠燈由機械驗證判定。同一步驟失敗 3 次即停，記錄卡點。使用者確認不超過 3 次。
+自主修復邊界照 spec v0.3.0 的 AGT-1/2/3：可補裝缺漏開發依賴、生成型別、對傳播期暫態重試，**但每次修復必須記入報告**；不得改服務邏輯、放寬驗收或跳過閘門。
 
 ## 前置
 
 - node 20+、npm（上游有 package-lock.json，安裝可重現）；`CLOUDFLARE_API_TOKEN`＋`CLOUDFLARE_ACCOUNT_ID` 環境變數（Workers＋D1＋KV Edit 權限；**不需 Vectorize 權限——本 adapter 即為無該權限帳號的降級版**）
 - 帳號需已註冊 workers.dev 子網域；Workers AI 免費額度可用（embedding＋LLM 用）
-- 降級語義：語意搜尋→關鍵字搜尋（上游原生 fallback）；語意去重與向量鄰居邊停用（patch 0002 non-fatal）
+- 降級語義：語意搜尋→關鍵字搜尋（上游原生 fallback）；語意去重與向量鄰居邊停用；擷取的筆記 `vector_ids` 記為空（落入上游 `unvectorized` 回補集合）；`POST /migration/reembed` 回 503 而非假成功
+- 閘門指令（乾淨環境須全數 exit 0，CON-8；順序不可調換——tsc 依賴 wrangler types 的生成物）：`npx wrangler types` → `npx tsc --noEmit` → `npm test`。**兩個 patch 都套上後仍須全綠**：patch 0002 含型別宣告，缺它降級樹會在 13 處報 TS2339
 
 ## 步驟
 
@@ -18,9 +20,9 @@
 
 ```bash
 git clone https://github.com/rahilp/second-brain-cloudflare.git second-brain && cd second-brain
-git checkout 371a8f987b2e4e8d95fc60d20580fb4757877641   # 與 UPSTREAM.md 一致
+git checkout 4e5424efae99e9666d4aa901f1ad2715bac0cb13   # 與 UPSTREAM.md 一致（Worker v2.2.0）
 git apply <本repo>/patches/0001-remove-vectorize-binding.patch
-git apply <本repo>/patches/0002-vectorize-writepath-nonfatal.patch
+git apply <本repo>/patches/0002-vectorize-optional-binding.patch
 npm ci
 ```
 

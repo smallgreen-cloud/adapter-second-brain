@@ -17,6 +17,8 @@ user_acceptance:
   - task: 未帶 AUTH_TOKEN 打寫入端點
     success_looks_like: 401/403＝token 認證生效
   - task: 刪除該筆記
-    success_looks_like: 回應 deleted；再搜尋不命中（Vectorize deleteByIds 在降級模式 non-fatal 略過，不阻斷刪除）
+    success_looks_like: 回應 deleted；再搜尋不命中（Vectorize deleteByIds 在降級模式略過，不阻斷刪除）
+  - task: 帶 AUTH_TOKEN 打 POST /migration/reembed（v2.2 新增的重嵌入路由）
+    success_looks_like: 回 503 且 error 指出索引不可用——降級模式下拒絕執行，而非逐筆回報成功卻沒寫入（patch 0002 約束三）
 uninstall_check:
   resource_zero_diff: true
