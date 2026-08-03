@@ -5,7 +5,7 @@
 
 ## 前置
 
-- node 20+、npm（上游有 package-lock.json，安裝可重現）；`CLOUDFLARE_API_TOKEN`＋`CLOUDFLARE_ACCOUNT_ID` 環境變數（Workers＋D1＋KV Edit 權限；**不需 Vectorize 權限——本 adapter 即為無該權限帳號的降級版**）
+- node 22+、npm（上游 wrangler 4.x 要求 node>=22；有 package-lock.json，安裝可重現）；`CLOUDFLARE_API_TOKEN`＋`CLOUDFLARE_ACCOUNT_ID` 環境變數（Workers＋D1＋KV Edit 權限；**不需 Vectorize 權限——本 adapter 即為無該權限帳號的降級版**）
 - 帳號需已註冊 workers.dev 子網域；Workers AI 免費額度可用（embedding＋LLM 用）
 - 降級語義：語意搜尋→關鍵字搜尋（上游原生 fallback）；語意去重與向量鄰居邊停用；擷取的筆記 `vector_ids` 記為空（落入上游 `unvectorized` 回補集合）；`POST /migration/reembed` 回 503 而非假成功
 - 閘門指令（乾淨環境須全數 exit 0，CON-8；順序不可調換——tsc 依賴 wrangler types 的生成物）：`npx wrangler types` → `npx tsc --noEmit` → `npm test`。**兩個 patch 都套上後仍須全綠**：patch 0002 含型別宣告，缺它降級樹會在 13 處報 TS2339

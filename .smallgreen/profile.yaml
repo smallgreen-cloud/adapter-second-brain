@@ -38,7 +38,7 @@ secrets:
 external_services: []
 alt_deployment: []
 build_requirements:
-  runtime: node>=20
+  runtime: node>=22
   package_manager: npm
   gates:
     - npx wrangler types
